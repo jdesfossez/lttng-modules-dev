@@ -6,6 +6,8 @@
 
 #include <linux/tracepoint.h>
 #include <linux/syscalls.h>
+#include <linux/in.h>
+#include <linux/in6.h>
 #include "x86-64-syscalls-3.10.0-rc7_pointers_override.h"
 #include "syscalls_pointers_override.h"
 
@@ -706,8 +708,30 @@ SC_TRACE_EVENT(sys_setitimer,
 SC_TRACE_EVENT(sys_connect,
 	TP_PROTO(int fd, struct sockaddr * uservaddr, int addrlen),
 	TP_ARGS(fd, uservaddr, addrlen),
-	TP_STRUCT__entry(__field(int, fd) __field_hex(struct sockaddr *, uservaddr) __field_hex(int, addrlen)),
-	TP_fast_assign(tp_assign(fd, fd) tp_assign(uservaddr, uservaddr) tp_assign(addrlen, addrlen)),
+	TP_STRUCT__entry(
+		__field(int, fd)
+		__field_hex(struct sockaddr *, uservaddr)
+		__field_hex(int, addrlen)
+		__field(int, family)
+		__field_network_hex(uint32_t, v4addr)
+		__field_network_hex(uint16_t, dport)
+		__dynamic_array_network_hex(uint16_t, v6addr,
+			uservaddr->sa_family == AF_INET6 ? 8 : 0)
+	),
+	TP_fast_assign(
+		tp_assign(fd, fd)
+		tp_assign(uservaddr, uservaddr)
+		tp_assign(addrlen, addrlen)
+		tp_assign(family, uservaddr->sa_family)
+		tp_assign(v4addr, uservaddr->sa_family == AF_INET ?
+			((struct sockaddr_in *) uservaddr)->sin_addr.s_addr : 0)
+		tp_assign(dport, uservaddr->sa_family == AF_INET ?
+			((struct sockaddr_in *) uservaddr)->sin_port :
+			((uservaddr->sa_family == AF_INET6) ?
+				((struct sockaddr_in6 *) uservaddr)->sin6_port: 0))
+		tp_memcpy_dyn(v6addr, (uservaddr->sa_family == AF_INET6) ?
+			((struct sockaddr_in6 *) uservaddr)->sin6_addr.in6_u.u6_addr8 : 0)
+	),
 	TP_printk()
 )
 #endif

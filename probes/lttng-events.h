@@ -256,6 +256,10 @@ void trace_##_name(void *__data);
 #define __dynamic_array_hex(_type, _item, _length)		\
 	__dynamic_array_enc_ext(_type, _item, _length, __BYTE_ORDER, 16, none)
 
+#undef __dynamic_array_network_hex
+#define __dynamic_array_network_hex(_type, _item, _length)		\
+	__dynamic_array_enc_ext(_type, _item, _length, __BIG_ENDIAN, 16, none)
+
 #undef __dynamic_array_text_2
 #define __dynamic_array_text_2(_type, _item, _length1, _length2)	\
 	__dynamic_array_enc_ext_2(_type, _item, _length1, _length2, __BYTE_ORDER, 10, UTF8)
