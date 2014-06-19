@@ -714,7 +714,7 @@ SC_TRACE_EVENT(sys_connect,
 		__field_hex(int, addrlen)
 		__field(int, family)
 		__field_network_hex(uint32_t, v4addr)
-		__field_network_hex(uint16_t, dport)
+		__field_network(uint16_t, dport)
 		__dynamic_array_network_hex(uint16_t, v6addr,
 			uservaddr->sa_family == AF_INET6 ? 8 : 0)
 	),
@@ -745,7 +745,7 @@ SC_TRACE_EVENT(sys_accept,
 		__field_hex(int *, upeer_addrlen)
 		__field(int, family)
 		__field_network_hex(uint32_t, v4addr)
-		__field_network_hex(uint16_t, sport)
+		__field_network(uint16_t, sport)
 		__dynamic_array_network_hex(uint16_t, v6addr,
 			upeer_sockaddr->sa_family == AF_INET6 ? 8 : 0)
 		),
