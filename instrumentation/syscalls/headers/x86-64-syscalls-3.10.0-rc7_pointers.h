@@ -739,8 +739,30 @@ SC_TRACE_EVENT(sys_connect,
 SC_TRACE_EVENT(sys_accept,
 	TP_PROTO(int fd, struct sockaddr * upeer_sockaddr, int * upeer_addrlen),
 	TP_ARGS(fd, upeer_sockaddr, upeer_addrlen),
-	TP_STRUCT__entry(__field(int, fd) __field_hex(struct sockaddr *, upeer_sockaddr) __field_hex(int *, upeer_addrlen)),
-	TP_fast_assign(tp_assign(fd, fd) tp_assign(upeer_sockaddr, upeer_sockaddr) tp_assign(upeer_addrlen, upeer_addrlen)),
+	TP_STRUCT__entry(
+		__field(int, fd)
+		__field_hex(struct sockaddr *, upeer_sockaddr)
+		__field_hex(int *, upeer_addrlen)
+		__field(int, family)
+		__field_network_hex(uint32_t, v4addr)
+		__field_network_hex(uint16_t, sport)
+		__dynamic_array_network_hex(uint16_t, v6addr,
+			upeer_sockaddr->sa_family == AF_INET6 ? 8 : 0)
+		),
+	TP_fast_assign(
+		tp_assign(fd, fd)
+		tp_assign(upeer_sockaddr, upeer_sockaddr)
+		tp_assign(upeer_addrlen, upeer_addrlen)
+		tp_assign(family, upeer_sockaddr->sa_family)
+		tp_assign(v4addr, upeer_sockaddr->sa_family == AF_INET ?
+			((struct sockaddr_in *) upeer_sockaddr)->sin_addr.s_addr : 0)
+		tp_assign(sport, upeer_sockaddr->sa_family == AF_INET ?
+			((struct sockaddr_in *) upeer_sockaddr)->sin_port :
+			((upeer_sockaddr->sa_family == AF_INET6) ?
+			 ((struct sockaddr_in6 *) upeer_sockaddr)->sin6_port: 0))
+		tp_memcpy_dyn(v6addr, (upeer_sockaddr->sa_family == AF_INET6) ?
+			((struct sockaddr_in6 *) upeer_sockaddr)->sin6_addr.in6_u.u6_addr8 : 0)
+		),
 	TP_printk()
 )
 #endif
