@@ -1,6 +1,8 @@
 #ifndef _LTTNG_EVENTS_H
 #define _LTTNG_EVENTS_H
 
+#undef CONFIG_HAVE_SYSCALL_TRACEPOINTS
+
 /*
  * lttng-events.h
  *

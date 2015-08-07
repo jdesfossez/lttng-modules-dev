@@ -37,6 +37,8 @@
  *     - Takes instrumentation source specific arguments.
  */
 
+#undef CONFIG_HAVE_SYSCALL_TRACEPOINTS
+
 #include <linux/module.h>
 #include <linux/proc_fs.h>
 #include <linux/anon_inodes.h>
