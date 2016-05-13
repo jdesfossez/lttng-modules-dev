@@ -560,6 +560,26 @@ LTTNG_TRACEPOINT_EVENT(sched_pi_setprio,
 )
 #endif
 
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4,6,0))
+/*
+ * Tracepoint for priority changes of a task.
+ */
+LTTNG_TRACEPOINT_EVENT(sched_set_prio,
+
+	TP_PROTO(struct task_struct *tsk, int newprio),
+
+	TP_ARGS(tsk, newprio),
+
+	TP_FIELDS(
+		ctf_array_text(char, comm, tsk->comm, TASK_COMM_LEN)
+		ctf_integer(pid_t, tid, tsk->pid)
+		ctf_integer(int, oldprio, tsk->prio - MAX_RT_PRIO)
+		ctf_integer(int, newprio, newprio - MAX_RT_PRIO)
+		)
+	)
+#endif
+
+
 #endif /* LTTNG_TRACE_SCHED_H */
 
 /* This part must be outside protection */
