@@ -1909,7 +1909,7 @@ int _lttng_enum_statedump(struct lttng_session *session,
 	if (ret)
 		goto end;
 	ret = lttng_metadata_printf(session,
-		"enum : integer { size = %u; align = %u; signed = %u; encoding = %s; base = %u; } {\n",
+		"enum : integer { size = %u; align = %u; signed = %u; encoding = %s; base = %u;%s } {\n",
 		container_type->size,
 		container_type->alignment,
 		container_type->signedness,
@@ -1918,7 +1918,13 @@ int _lttng_enum_statedump(struct lttng_session *session,
 			: (container_type->encoding == lttng_encode_UTF8)
 				? "UTF8"
 				: "ASCII",
-		container_type->base);
+		container_type->base,
+#if __BYTE_ORDER == __BIG_ENDIAN
+		container_type->reverse_byte_order ? " byte_order = le;" : ""
+#else
+		container_type->reverse_byte_order ? " byte_order = be;" : ""
+#endif
+		);
 	if (ret)
 	        goto end;
 	/* Dump all entries */
@@ -1955,33 +1961,46 @@ int _lttng_enum_statedump(struct lttng_session *session,
 			if (ret)
 				goto end;
 		}
-		ret = lttng_metadata_printf(session,
-				"\" = ");
+		ret = lttng_metadata_printf(session, "\"");
 		if (ret)
 			goto end;
-		if (entry->start.signedness)
-			ret = lttng_metadata_printf(session,
-				"%lld", (long long) entry->start.value);
-		else
-			ret = lttng_metadata_printf(session,
-				"%llu", entry->start.value);
-		if (ret)
-			goto end;
-		if (entry->start.signedness == entry->end.signedness &&
-				entry->start.value == entry->end.value) {
-			ret = lttng_metadata_printf(session,
-				",\n");
+
+		if (entry->options.is_auto) {
+			ret = lttng_metadata_printf(session, ",\n");
+			if (ret)
+				goto end;
 		} else {
-			if (entry->end.signedness) {
+			ret = lttng_metadata_printf(session,
+					" = ");
+			if (ret)
+				goto end;
+			if (entry->start.signedness)
 				ret = lttng_metadata_printf(session,
-					" ... %lld,\n", (long long) entry->end.value);
+					"%lld", (long long) entry->start.value);
+			else
+				ret = lttng_metadata_printf(session,
+					"%llu", entry->start.value);
+			if (ret)
+				goto end;
+			if (entry->start.signedness == entry->end.signedness &&
+					entry->start.value
+						== entry->end.value) {
+				ret = lttng_metadata_printf(session,
+					",\n");
 			} else {
-				ret = lttng_metadata_printf(session,
-					" ... %llu,\n", entry->end.value);
+				if (entry->end.signedness) {
+					ret = lttng_metadata_printf(session,
+						" ... %lld,\n",
+						(long long) entry->end.value);
+				} else {
+					ret = lttng_metadata_printf(session,
+						" ... %llu,\n",
+						entry->end.value);
+				}
 			}
+			if (ret)
+				goto end;
 		}
-		if (ret)
-			goto end;
 	}
 	ret = print_tabs(session, nesting);
 	if (ret)
@@ -2402,7 +2421,7 @@ int64_t measure_clock_offset(void)
 	/* Disable interrupts to increase correlation precision. */
 	local_irq_save(flags);
 	monotonic[0] = trace_clock_read64();
-	getnstimeofday(&rts);      
+	getnstimeofday(&rts);
 	monotonic[1] = trace_clock_read64();
 	local_irq_restore(flags);
 
