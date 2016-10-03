@@ -202,6 +202,42 @@ int subbuffer_id_check_index(const struct lib_ring_buffer_config *config,
 }
 
 static inline
+void lib_ring_buffer_backend_get_pages(const struct lib_ring_buffer_config *config,
+			struct lib_ring_buffer_ctx *ctx,
+			struct lib_ring_buffer_backend_pages **backend_pages)
+{
+	struct lib_ring_buffer_backend *bufb = &ctx->buf->backend;
+	struct channel_backend *chanb = &ctx->chan->backend;
+	size_t sbidx, offset = ctx->buf_offset;
+	unsigned long sb_bindex, id;
+	struct lib_ring_buffer_backend_pages *rpages;
+
+	offset &= chanb->buf_size - 1;
+	sbidx = offset >> chanb->subbuf_size_order;
+	id = bufb->buf_wsb[sbidx].id;
+	sb_bindex = subbuffer_id_get_index(config, id);
+	rpages = bufb->array[sb_bindex];
+	CHAN_WARN_ON(ctx->chan,
+		     config->mode == RING_BUFFER_OVERWRITE
+		     && subbuffer_id_is_noref(config, id));
+	*backend_pages = rpages;
+}
+
+/* Get backend pages from cache. */
+static inline
+struct lib_ring_buffer_backend_pages *
+	lib_ring_buffer_get_backend_pages_from_ctx(const struct lib_ring_buffer_config *config,
+		struct lib_ring_buffer_ctx *ctx)
+{
+	return ctx->backend_pages;
+}
+
+/*
+ * The ring buffer can count events recorded and overwritten per buffer,
+ * but it is disabled by default due to its performance overhead.
+ */
+#ifdef LTTNG_RING_BUFFER_COUNT_EVENTS
+static inline
 void subbuffer_count_record(const struct lib_ring_buffer_config *config,
 			    struct lib_ring_buffer_backend *bufb,
 			    unsigned long idx)
@@ -211,6 +247,14 @@ void subbuffer_count_record(const struct lib_ring_buffer_config *config,
 	sb_bindex = subbuffer_id_get_index(config, bufb->buf_wsb[idx].id);
 	v_inc(config, &bufb->array[sb_bindex]->records_commit);
 }
+#else /* LTTNG_RING_BUFFER_COUNT_EVENTS */
+static inline
+void subbuffer_count_record(const struct lib_ring_buffer_config *config,
+			    struct lib_ring_buffer_backend *bufb,
+			    unsigned long idx)
+{
+}
+#endif /* #else LTTNG_RING_BUFFER_COUNT_EVENTS */
 
 /*
  * Reader has exclusive subbuffer access for record consumption. No need to
@@ -434,6 +478,28 @@ int update_read_sb_index(const struct lib_ring_buffer_config *config,
 	return 0;
 }
 
+static inline __attribute__((always_inline))
+void lttng_inline_memcpy(void *dest, const void *src,
+		unsigned long len)
+{
+	switch (len) {
+	case 1:
+		*(uint8_t *) dest = *(const uint8_t *) src;
+		break;
+	case 2:
+		*(uint16_t *) dest = *(const uint16_t *) src;
+		break;
+	case 4:
+		*(uint32_t *) dest = *(const uint32_t *) src;
+		break;
+	case 8:
+		*(uint64_t *) dest = *(const uint64_t *) src;
+		break;
+	default:
+		inline_memcpy(dest, src, len);
+	}
+}
+
 /*
  * Use the architecture-specific memcpy implementation for constant-sized
  * inputs, but rely on an inline memcpy for length statically unknown.
@@ -445,7 +511,7 @@ do {								\
 	if (__builtin_constant_p(len))				\
 		memcpy(dest, src, __len);			\
 	else							\
-		inline_memcpy(dest, src, __len);		\
+		lttng_inline_memcpy(dest, src, __len);		\
 } while (0)
 
 /*

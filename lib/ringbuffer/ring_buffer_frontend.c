@@ -97,6 +97,47 @@ static
 void _lib_ring_buffer_switch_remote(struct lib_ring_buffer *buf,
 		enum switch_mode mode);
 
+static
+int lib_ring_buffer_poll_deliver(const struct lib_ring_buffer_config *config,
+				 struct lib_ring_buffer *buf,
+			         struct channel *chan)
+{
+	unsigned long consumed_old, consumed_idx, commit_count, write_offset;
+
+	consumed_old = atomic_long_read(&buf->consumed);
+	consumed_idx = subbuf_index(consumed_old, chan);
+	commit_count = v_read(config, &buf->commit_cold[consumed_idx].cc_sb);
+	/*
+	 * No memory barrier here, since we are only interested
+	 * in a statistically correct polling result. The next poll will
+	 * get the data is we are racing. The mb() that ensures correct
+	 * memory order is in get_subbuf.
+	 */
+	write_offset = v_read(config, &buf->offset);
+
+	/*
+	 * Check that the subbuffer we are trying to consume has been
+	 * already fully committed.
+	 */
+
+	if (((commit_count - chan->backend.subbuf_size)
+	     & chan->commit_count_mask)
+	    - (buf_trunc(consumed_old, chan)
+	       >> chan->backend.num_subbuf_order)
+	    != 0)
+		return 0;
+
+	/*
+	 * Check that we are not about to read the same subbuffer in
+	 * which the writer head is.
+	 */
+	if (subbuf_trunc(write_offset, chan) - subbuf_trunc(consumed_old, chan)
+	    == 0)
+		return 0;
+
+	return 1;
+}
+
 /*
  * Must be called under cpu hotplug protection.
  */
@@ -206,7 +247,8 @@ int lib_ring_buffer_create(struct lib_ring_buffer *buf,
 		kzalloc_node(ALIGN(sizeof(*buf->commit_hot)
 				   * chan->backend.num_subbuf,
 				   1 << INTERNODE_CACHE_SHIFT),
-			GFP_KERNEL, cpu_to_node(max(cpu, 0)));
+			GFP_KERNEL | __GFP_NOWARN,
+			cpu_to_node(max(cpu, 0)));
 	if (!buf->commit_hot) {
 		ret = -ENOMEM;
 		goto free_chanbuf;
@@ -216,7 +258,8 @@ int lib_ring_buffer_create(struct lib_ring_buffer *buf,
 		kzalloc_node(ALIGN(sizeof(*buf->commit_cold)
 				   * chan->backend.num_subbuf,
 				   1 << INTERNODE_CACHE_SHIFT),
-			GFP_KERNEL, cpu_to_node(max(cpu, 0)));
+			GFP_KERNEL | __GFP_NOWARN,
+			cpu_to_node(max(cpu, 0)));
 	if (!buf->commit_cold) {
 		ret = -ENOMEM;
 		goto free_commit;
@@ -1315,6 +1358,7 @@ void lib_ring_buffer_switch_old_start(struct lib_ring_buffer *buf,
 	const struct lib_ring_buffer_config *config = &chan->backend.config;
 	unsigned long oldidx = subbuf_index(offsets->old, chan);
 	unsigned long commit_count;
+	struct commit_counters_hot *cc_hot;
 
 	config->cb.buffer_begin(buf, tsc, oldidx);
 
@@ -1331,15 +1375,15 @@ void lib_ring_buffer_switch_old_start(struct lib_ring_buffer *buf,
 		barrier();
 	} else
 		smp_wmb();
-	v_add(config, config->cb.subbuffer_header_size(),
-	      &buf->commit_hot[oldidx].cc);
-	commit_count = v_read(config, &buf->commit_hot[oldidx].cc);
+	cc_hot = &buf->commit_hot[oldidx];
+	v_add(config, config->cb.subbuffer_header_size(), &cc_hot->cc);
+	commit_count = v_read(config, &cc_hot->cc);
 	/* Check if the written buffer has to be delivered */
 	lib_ring_buffer_check_deliver(config, buf, chan, offsets->old,
 				      commit_count, oldidx, tsc);
-	lib_ring_buffer_write_commit_counter(config, buf, chan, oldidx,
+	lib_ring_buffer_write_commit_counter(config, buf, chan,
 			offsets->old + config->cb.subbuffer_header_size(),
-			commit_count);
+			commit_count, cc_hot);
 }
 
 /*
@@ -1359,6 +1403,7 @@ void lib_ring_buffer_switch_old_end(struct lib_ring_buffer *buf,
 	const struct lib_ring_buffer_config *config = &chan->backend.config;
 	unsigned long oldidx = subbuf_index(offsets->old - 1, chan);
 	unsigned long commit_count, padding_size, data_size;
+	struct commit_counters_hot *cc_hot;
 
 	data_size = subbuf_offset(offsets->old - 1, chan) + 1;
 	padding_size = chan->backend.subbuf_size - data_size;
@@ -1377,12 +1422,14 @@ void lib_ring_buffer_switch_old_end(struct lib_ring_buffer *buf,
 		barrier();
 	} else
 		smp_wmb();
-	v_add(config, padding_size, &buf->commit_hot[oldidx].cc);
-	commit_count = v_read(config, &buf->commit_hot[oldidx].cc);
+	cc_hot = &buf->commit_hot[oldidx];
+	v_add(config, padding_size, &cc_hot->cc);
+	commit_count = v_read(config, &cc_hot->cc);
 	lib_ring_buffer_check_deliver(config, buf, chan, offsets->old - 1,
 				      commit_count, oldidx, tsc);
-	lib_ring_buffer_write_commit_counter(config, buf, chan, oldidx,
-			offsets->old + padding_size, commit_count);
+	lib_ring_buffer_write_commit_counter(config, buf, chan,
+			offsets->old + padding_size, commit_count,
+			cc_hot);
 }
 
 /*
@@ -1401,6 +1448,7 @@ void lib_ring_buffer_switch_new_start(struct lib_ring_buffer *buf,
 	const struct lib_ring_buffer_config *config = &chan->backend.config;
 	unsigned long beginidx = subbuf_index(offsets->begin, chan);
 	unsigned long commit_count;
+	struct commit_counters_hot *cc_hot;
 
 	config->cb.buffer_begin(buf, tsc, beginidx);
 
@@ -1417,15 +1465,15 @@ void lib_ring_buffer_switch_new_start(struct lib_ring_buffer *buf,
 		barrier();
 	} else
 		smp_wmb();
-	v_add(config, config->cb.subbuffer_header_size(),
-	      &buf->commit_hot[beginidx].cc);
-	commit_count = v_read(config, &buf->commit_hot[beginidx].cc);
+	cc_hot = &buf->commit_hot[beginidx];
+	v_add(config, config->cb.subbuffer_header_size(), &cc_hot->cc);
+	commit_count = v_read(config, &cc_hot->cc);
 	/* Check if the written buffer has to be delivered */
 	lib_ring_buffer_check_deliver(config, buf, chan, offsets->begin,
 				      commit_count, beginidx, tsc);
-	lib_ring_buffer_write_commit_counter(config, buf, chan, beginidx,
+	lib_ring_buffer_write_commit_counter(config, buf, chan,
 			offsets->begin + config->cb.subbuffer_header_size(),
-			commit_count);
+			commit_count, cc_hot);
 }
 
 /*
@@ -1928,6 +1976,147 @@ int lib_ring_buffer_reserve_slow(struct lib_ring_buffer_ctx *ctx)
 	return 0;
 }
 EXPORT_SYMBOL_GPL(lib_ring_buffer_reserve_slow);
+
+static
+void lib_ring_buffer_vmcore_check_deliver(const struct lib_ring_buffer_config *config,
+					  struct lib_ring_buffer *buf,
+				          unsigned long commit_count,
+				          unsigned long idx)
+{
+	if (config->oops == RING_BUFFER_OOPS_CONSISTENCY)
+		v_set(config, &buf->commit_hot[idx].seq, commit_count);
+}
+
+/*
+ * The ring buffer can count events recorded and overwritten per buffer,
+ * but it is disabled by default due to its performance overhead.
+ */
+#ifdef LTTNG_RING_BUFFER_COUNT_EVENTS
+static
+void deliver_count_events(const struct lib_ring_buffer_config *config,
+		struct lib_ring_buffer *buf,
+		unsigned long idx)
+{
+	v_add(config, subbuffer_get_records_count(config,
+			&buf->backend, idx),
+		&buf->records_count);
+	v_add(config, subbuffer_count_records_overrun(config,
+			&buf->backend, idx),
+		&buf->records_overrun);
+}
+#else /* LTTNG_RING_BUFFER_COUNT_EVENTS */
+static
+void deliver_count_events(const struct lib_ring_buffer_config *config,
+		struct lib_ring_buffer *buf,
+		unsigned long idx)
+{
+}
+#endif /* #else LTTNG_RING_BUFFER_COUNT_EVENTS */
+
+
+void lib_ring_buffer_check_deliver_slow(const struct lib_ring_buffer_config *config,
+				   struct lib_ring_buffer *buf,
+			           struct channel *chan,
+			           unsigned long offset,
+				   unsigned long commit_count,
+			           unsigned long idx,
+				   u64 tsc)
+{
+	unsigned long old_commit_count = commit_count
+					 - chan->backend.subbuf_size;
+
+	/*
+	 * If we succeeded at updating cc_sb below, we are the subbuffer
+	 * writer delivering the subbuffer. Deals with concurrent
+	 * updates of the "cc" value without adding a add_return atomic
+	 * operation to the fast path.
+	 *
+	 * We are doing the delivery in two steps:
+	 * - First, we cmpxchg() cc_sb to the new value
+	 *   old_commit_count + 1. This ensures that we are the only
+	 *   subbuffer user successfully filling the subbuffer, but we
+	 *   do _not_ set the cc_sb value to "commit_count" yet.
+	 *   Therefore, other writers that would wrap around the ring
+	 *   buffer and try to start writing to our subbuffer would
+	 *   have to drop records, because it would appear as
+	 *   non-filled.
+	 *   We therefore have exclusive access to the subbuffer control
+	 *   structures.  This mutual exclusion with other writers is
+	 *   crucially important to perform record overruns count in
+	 *   flight recorder mode locklessly.
+	 * - When we are ready to release the subbuffer (either for
+	 *   reading or for overrun by other writers), we simply set the
+	 *   cc_sb value to "commit_count" and perform delivery.
+	 *
+	 * The subbuffer size is least 2 bytes (minimum size: 1 page).
+	 * This guarantees that old_commit_count + 1 != commit_count.
+	 */
+
+	/*
+	 * Order prior updates to reserve count prior to the
+	 * commit_cold cc_sb update.
+	 */
+	smp_wmb();
+	if (likely(v_cmpxchg(config, &buf->commit_cold[idx].cc_sb,
+				 old_commit_count, old_commit_count + 1)
+		   == old_commit_count)) {
+		/*
+		 * Start of exclusive subbuffer access. We are
+		 * guaranteed to be the last writer in this subbuffer
+		 * and any other writer trying to access this subbuffer
+		 * in this state is required to drop records.
+		 */
+		deliver_count_events(config, buf, idx);
+		config->cb.buffer_end(buf, tsc, idx,
+				      lib_ring_buffer_get_data_size(config,
+								buf,
+								idx));
+
+		/*
+		 * Increment the packet counter while we have exclusive
+		 * access.
+		 */
+		subbuffer_inc_packet_count(config, &buf->backend, idx);
+
+		/*
+		 * Set noref flag and offset for this subbuffer id.
+		 * Contains a memory barrier that ensures counter stores
+		 * are ordered before set noref and offset.
+		 */
+		lib_ring_buffer_set_noref_offset(config, &buf->backend, idx,
+						 buf_trunc_val(offset, chan));
+
+		/*
+		 * Order set_noref and record counter updates before the
+		 * end of subbuffer exclusive access. Orders with
+		 * respect to writers coming into the subbuffer after
+		 * wrap around, and also order wrt concurrent readers.
+		 */
+		smp_mb();
+		/* End of exclusive subbuffer access */
+		v_set(config, &buf->commit_cold[idx].cc_sb,
+		      commit_count);
+		/*
+		 * Order later updates to reserve count after
+		 * the commit_cold cc_sb update.
+		 */
+		smp_wmb();
+		lib_ring_buffer_vmcore_check_deliver(config, buf,
+						 commit_count, idx);
+
+		/*
+		 * RING_BUFFER_WAKEUP_BY_WRITER wakeup is not lock-free.
+		 */
+		if (config->wakeup == RING_BUFFER_WAKEUP_BY_WRITER
+		    && atomic_long_read(&buf->active_readers)
+		    && lib_ring_buffer_poll_deliver(config, buf, chan)) {
+			wake_up_interruptible(&buf->read_wait);
+			wake_up_interruptible(&chan->read_wait);
+		}
+
+	}
+}
+EXPORT_SYMBOL_GPL(lib_ring_buffer_check_deliver_slow);
 
 int __init init_lib_ring_buffer_frontend(void)
 {
