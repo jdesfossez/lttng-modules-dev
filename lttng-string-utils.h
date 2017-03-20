@@ -1,10 +1,8 @@
+#ifndef _LTTNG_STRING_UTILS_H
+#define _LTTNG_STRING_UTILS_H
+
 /*
- * wrapper/trace-clock.c
- *
- * Contains LTTng trace clock mapping to LTTng trace clock or mainline monotonic
- * clock. This wrapper depends on CONFIG_HIGH_RES_TIMERS=y.
- *
- * Copyright (C) 2011-2012 Mathieu Desnoyers <mathieu.desnoyers@efficios.com>
+ * Copyright (C) 2017 Philippe Proulx <pproulx@efficios.com>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -21,13 +19,18 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include <wrapper/trace-clock.h>
+#include <stdbool.h>
 
-#ifdef LTTNG_USE_NMI_SAFE_CLOCK
-DEFINE_PER_CPU(u64, lttng_last_tsc);
-EXPORT_PER_CPU_SYMBOL(lttng_last_tsc);
-#endif /* #ifdef LTTNG_USE_NMI_SAFE_CLOCK */
+typedef char (*strutils_get_char_at_cb)(size_t, void *);
 
-#ifdef LTTNG_CLOCK_NMI_SAFE_BROKEN
-#warning "Your kernel implements a bogus nmi-safe clock source. Falling back to the non-nmi-safe clock source, which discards events traced from NMI context. Upgrade your kernel to resolve this situation."
-#endif
+bool strutils_is_star_glob_pattern(const char *pattern);
+bool strutils_is_star_at_the_end_only_glob_pattern(const char *pattern);
+bool strutils_star_glob_match(const char *pattern, size_t pattern_len,
+		const char *candidate, size_t candidate_len);
+bool strutils_star_glob_match_char_cb(
+		strutils_get_char_at_cb pattern_get_char_at_cb,
+		void *pattern_get_char_at_cb_data,
+		strutils_get_char_at_cb candidate_get_char_at_cb,
+		void *candidate_get_char_at_cb_data);
+
+#endif /* _LTTNG_STRING_UTILS_H */

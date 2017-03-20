@@ -46,11 +46,13 @@
 #include <wrapper/random.h>
 #include <wrapper/tracepoint.h>
 #include <wrapper/list.h>
+#include <wrapper/types.h>
 #include <lttng-kernel-version.h>
 #include <lttng-events.h>
 #include <lttng-tracer.h>
 #include <lttng-abi-old.h>
 #include <lttng-endian.h>
+#include <lttng-string-utils.h>
 #include <wrapper/vzalloc.h>
 #include <wrapper/ringbuffer/backend.h>
 #include <wrapper/ringbuffer/frontend.h>
@@ -1142,11 +1144,11 @@ fd_error:
  * Enabler management.
  */
 static
-int lttng_match_enabler_wildcard(const char *desc_name,
-		const char *name)
+int lttng_match_enabler_star_glob(const char *desc_name,
+		const char *pattern)
 {
-	/* Compare excluding final '*' */
-	if (strncmp(desc_name, name, strlen(name) - 1))
+	if (!strutils_star_glob_match(pattern, LTTNG_SIZE_MAX,
+			desc_name, LTTNG_SIZE_MAX))
 		return 0;
 	return 1;
 }
@@ -1191,8 +1193,8 @@ int lttng_desc_match_enabler(const struct lttng_event_desc *desc,
 		return -EINVAL;
 	}
 	switch (enabler->type) {
-	case LTTNG_ENABLER_WILDCARD:
-		return lttng_match_enabler_wildcard(desc_name, enabler_name);
+	case LTTNG_ENABLER_STAR_GLOB:
+		return lttng_match_enabler_star_glob(desc_name, enabler_name);
 	case LTTNG_ENABLER_NAME:
 		return lttng_match_enabler_name(desc_name, enabler_name);
 	default:
